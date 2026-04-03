@@ -1,6 +1,10 @@
-import { usePlayersList, useIsHost, useMultiplayerState, myPlayer } from "playroomkit";
+import { usePlayersList, useMultiplayerState, myPlayer } from "playroomkit";
 import { useState, useMemo, useEffect } from "react";
 import './App.css';
+
+// --- 类型定义 ---
+type BoardState = Record<string, string>;
+type UsedPiecesState = Record<string, string[]>;
 
 // --- 1. 核心数学：三角形网格判定 ---
 const getTileDir = (r: number, c: number) => (r + c) % 2 === 0 ? 1 : -1;
@@ -41,9 +45,9 @@ function App() {
   const me = myPlayer();
 
   // --- 3. 联机状态 ---
-  const [board, setBoard] = useMultiplayerState("board", {});
+  const [board, setBoard] = useMultiplayerState<BoardState>("board", {});
   const [turnIndex, setTurnIndex] = useMultiplayerState("turnIndex", 0);
-  const [usedPieces, setUsedPieces] = useMultiplayerState("usedPieces", {}); // { playerId: [pieceIds] }
+  const [usedPieces, setUsedPieces] = useMultiplayerState<UsedPiecesState>("usedPieces", {}); // { playerId: [pieceIds] }
 
   const currentPlayer = sortedPlayers[turnIndex % sortedPlayers.length];
   const isMyTurn = currentPlayer?.id === me?.id;
@@ -71,31 +75,6 @@ function App() {
     const activeDirection = original.direction * flipV * (rotation % 2 === 0 ? 1 : -1);
     return { shape: newShape, activeDirection };
   }, [selectedPieceId, rotation, flipV, flipH]);
-
-  const boardCells = useMemo(() => {
-    const cells = [];
-    const R_MAX = SIDE * 3 - 2; // 25 rows for side 9
-    for (let r = 0; r < R_MAX; r++) {
-      // 这里的数学逻辑确保了六边形的每一边都有 9 格
-      const rowStart = Math.max(0, SIDE - 1 - Math.floor(r / 2), r - (SIDE * 2 - 2));
-      const rowEnd = Math.min(SIDE * 3 - 3, SIDE * 2 - 2 + Math.floor(r / 2), (SIDE * 5 - 5) - r);
-      // 注意：这里的列 c 范围需要根据三角形网格特性精细调整
-      // 为了简化，我们使用一个覆盖 486 格的稳定计算
-      const rowWidth = r < SIDE ? SIDE + r : (r < SIDE * 2 - 1 ? SIDE * 2 - 1 : SIDE * 3 - 2 - (r - SIDE * 2 + 2));
-      const xOffset = (SIDE * 2 - 1 - Math.ceil(rowWidth/2)) * 2;
-      // 实际上使用三轴坐标系过滤最准确
-    }
-    // 简化版：使用 17 行钻石，每行 2 三角，确保 486 格显示全
-    const totalRows = SIDE * 2 - 1; 
-    for (let r = 0; r < totalRows; r++) {
-      const rowWidth = r < SIDE ? SIDE + r : SIDE * 3 - 2 - r;
-      const xOffset = (SIDE * 2 - 1 - rowWidth);
-      for (let c = 0; c < rowWidth * 2 - 1; c++) {
-        cells.push({ r, c: c + xOffset });
-      }
-    }
-    return cells;
-  }, []);
 
   const getNeighbors = (r: number, c: number) => {
     const isUp = getTileDir(r, c) === 1;
@@ -131,7 +110,8 @@ function App() {
   const isValidPlacement = useMemo(() => {
     if (!isMyTurn || !selectedPieceId || !ghostPos) return false;
     const myColor = me?.getProfile().color.hexString;
-    const isFirstMove = !Object.values(board).includes(myColor);
+    const isFirstMove = !Object.values(board).includes(myColor || "");
+    
     let hasCorner = false, hasSide = false, coversStart = false;
     for (const offset of transformedData.shape) {
       const r = ghostPos.r + offset.r, c = ghostPos.c + offset.c, key = `${r}-${c}`;
@@ -150,13 +130,17 @@ function App() {
 
   // --- 4. 落子并记录棋子消耗 ---
   const handleConfirm = () => {
-    if (!isValidPlacement || !selectedPieceId) return;
+    if (!isValidPlacement || !selectedPieceId || !me) return;
     const newBoard = { ...board };
-    const myColor = me?.getProfile().color.hexString;
-    transformedData.shape.forEach(o => { newBoard[`${ghostPos!.r + o.r}-${ghostPos!.c + o.c}`] = myColor; });
+    const myColor = me.getProfile().color.hexString;
+    transformedData.shape.forEach(o => { 
+      const r = ghostPos!.r + o.r;
+      const c = ghostPos!.c + o.c;
+      newBoard[`${r}-${c}`] = myColor; 
+    });
     
     // 更新消耗记录
-    const myId = me!.id;
+    const myId = me.id;
     const myUsed = usedPieces[myId] || [];
     const pieceKey = selectedPieceId.replace("p-", "");
     const newUsed = { ...usedPieces, [myId]: [...myUsed, pieceKey] };
