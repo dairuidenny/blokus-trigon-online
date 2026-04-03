@@ -5,8 +5,47 @@ import './App.css';
 // --- 类型定义 ---
 type BoardState = Record<string, string>;
 type UsedPiecesState = Record<string, string[]>;
+type CubeCoord = { x: number; y: number; z: number };
+type DoubledCoord = { r: number; c: number };
 
-// --- 1. 核心数学：三角形网格判定 ---
+// --- 1. 立方体坐标系统 ---
+// 朝上三角形: x + y + z = 0
+// 朝下三角形: x + y + z = -1
+
+const doubledToCube = (r: number, c: number): CubeCoord => {
+  const isUp = (r + c) % 2 === 0;
+  if (isUp) {
+    const x = c / 2;
+    const z = r;
+    const y = -x - z;
+    return { x, y, z };
+  } else {
+    const x = (c - 1) / 2;
+    const z = r;
+    const y = -x - z - 1;
+    return { x, y, z };
+  }
+};
+
+const cubeToDoubled = (cube: CubeCoord): DoubledCoord => {
+  const r = Math.round(cube.z);
+  const isUp = Math.abs(cube.x + cube.y + cube.z) < 0.5;
+  const c = isUp ? Math.round(2 * cube.x) : Math.round(2 * cube.x + 1);
+  return { r, c };
+};
+
+const rotateCubeCW = (cube: CubeCoord): CubeCoord => {
+  return { x: -cube.z, y: -cube.x, z: -cube.y };
+};
+
+const flipHCube = (cube: CubeCoord): CubeCoord => {
+  return { x: cube.z, y: cube.y, z: cube.x };
+};
+
+const flipVCube = (cube: CubeCoord): CubeCoord => {
+  return { x: cube.x, y: cube.z, z: cube.y };
+};
+
 const getTileDir = (r: number, c: number) => (r + c) % 2 === 0 ? 1 : -1;
 
 const SIDE = 9; 
@@ -61,32 +100,81 @@ function App() {
   const transformedData = useMemo(() => {
     const original = REAL_PIECES.find(p => `p-${p.id}` === selectedPieceId);
     if (!original) return { shape: [], activeDirection: 1 };
-    let newShape = original.shape.map(coord => ({ r: coord.r * flipV, c: coord.c * flipH }));
-    for (let i = 0; i < rotation; i++) {
-      newShape = newShape.map(pos => {
-        const isUp = (pos.r + pos.c) % 2 === 0;
-        const q = Math.floor(pos.c / 2);
-        const nextQ = -pos.r;
-        const nextR = isUp ? q + pos.r : q + pos.r + 1;
-        const nextIsUp = !isUp;
-        return { r: nextR, c: 2 * nextQ + (nextIsUp ? 0 : 1) };
-      });
+    
+    // 将 Doubled coordinates 转换为 Cube coordinates
+    let cubeShape = original.shape.map(coord => doubledToCube(coord.r, coord.c));
+    
+    // 应用翻转
+    if (flipH === -1) {
+      cubeShape = cubeShape.map(c => flipHCube(c));
     }
+    if (flipV === -1) {
+      cubeShape = cubeShape.map(c => flipVCube(c));
+    }
+    
+    // 应用旋转（在立方体坐标系中简单优雅）
+    for (let i = 0; i < rotation; i++) {
+      cubeShape = cubeShape.map(c => rotateCubeCW(c));
+    }
+    
+    // 转换回 Doubled coordinates
+    const shape = cubeShape.map(c => cubeToDoubled(c));
+    
+    // 计算最终方向（原始方向 × 翻转 × 旋转）
     const activeDirection = original.direction * flipV * (rotation % 2 === 0 ? 1 : -1);
-    return { shape: newShape, activeDirection };
+    return { shape, activeDirection };
   }, [selectedPieceId, rotation, flipV, flipH]);
 
   const getNeighbors = (r: number, c: number) => {
-    const isUp = getTileDir(r, c) === 1;
-    const sides: string[] = [];
-    const corners: string[] = [];
+    // 转换到立方体坐标计算邻居
+    const cube = doubledToCube(r, c);
+    const isUp = cube.x + cube.y + cube.z > -0.5; // 朝上三角形
+    
+    let edgeNeighbors: CubeCoord[] = [];
+    let cornerNeighbors: CubeCoord[] = [];
+    
     if (isUp) {
-      sides.push(`${r}-${c-1}`, `${r}-${c+1}`, `${r+1}-${c}`);
-      corners.push(`${r-1}-${c}`, `${r+1}-${c-2}`, `${r+1}-${c+2}`, `${r+1}-${c-1}`, `${r+1}-${c+1}`);
+      // 朝上三角形的3个边邻居和6个角邻居
+      edgeNeighbors = [
+        { x: cube.x + 1, y: cube.y - 1, z: cube.z },      // 右下
+        { x: cube.x - 1, y: cube.y + 1, z: cube.z },      // 左下
+        { x: cube.x, y: cube.y, z: cube.z + 1 }           // 上
+      ];
+      cornerNeighbors = [
+        { x: cube.x + 1, y: cube.y, z: cube.z - 1 },      // 右
+        { x: cube.x - 1, y: cube.y, z: cube.z - 1 },      // 左
+        { x: cube.x, y: cube.y + 1, z: cube.z - 1 },      // 左上
+        { x: cube.x, y: cube.y - 1, z: cube.z - 1 },      // 右上
+        { x: cube.x + 1, y: cube.y - 1, z: cube.z + 1 },  // 右下角
+        { x: cube.x - 1, y: cube.y + 1, z: cube.z + 1 }   // 左下角
+      ];
     } else {
-      sides.push(`${r}-${c-1}`, `${r}-${c+1}`, `${r-1}-${c}`);
-      corners.push(`${r+1}-${c}`, `${r-1}-${c-2}`, `${r-1}-${c+2}`, `${r-1}-${c-1}`, `${r-1}-${c+1}`);
+      // 朝下三角形的3个边邻居和6个角邻居
+      edgeNeighbors = [
+        { x: cube.x + 1, y: cube.y - 1, z: cube.z },      // 右上
+        { x: cube.x - 1, y: cube.y + 1, z: cube.z },      // 左上
+        { x: cube.x, y: cube.y, z: cube.z - 1 }           // 下
+      ];
+      cornerNeighbors = [
+        { x: cube.x + 1, y: cube.y, z: cube.z + 1 },      // 右
+        { x: cube.x - 1, y: cube.y, z: cube.z + 1 },      // 左
+        { x: cube.x, y: cube.y + 1, z: cube.z + 1 },      // 左下
+        { x: cube.x, y: cube.y - 1, z: cube.z + 1 },      // 右下
+        { x: cube.x + 1, y: cube.y - 1, z: cube.z - 1 },  // 右上角
+        { x: cube.x - 1, y: cube.y + 1, z: cube.z - 1 }   // 左上角
+      ];
     }
+    
+    // 转换回 Doubled coordinates
+    const sides = edgeNeighbors.map(c => {
+      const { r: nr, c: nc } = cubeToDoubled(c);
+      return `${nr}-${nc}`;
+    });
+    const corners = cornerNeighbors.map(c => {
+      const { r: nr, c: nc } = cubeToDoubled(c);
+      return `${nr}-${nc}`;
+    });
+    
     return { sides, corners };
   };
 
@@ -116,7 +204,7 @@ function App() {
     for (const offset of transformedData.shape) {
       const r = ghostPos.r + offset.r, c = ghostPos.c + offset.c, key = `${r}-${c}`;
       if (r < 0 || r > 16 || board[key]) return false;
-      const startPoints = [{r:3,c:8},{r:13,c:8},{r:5,c:3},{r:5,c:13},{r:11,c:3},{r:11,c:13}];
+      const startPoints = [{r:3,c:17},{r:6,c:9},{r:6,c:25},{r:11,c:9},{r:11,c:25},{r:14,c:17}];
       if (startPoints.some(p => p.r === r && p.c === c)) coversStart = true;
       const { sides, corners } = getNeighbors(r, c);
       for (const s of sides) if (board[s] === myColor) hasSide = true;
@@ -164,19 +252,19 @@ function App() {
               </div>
             ))}
           </div>
-          <div className="status-banner">{!isMyTurn ? `${currentPlayer?.getProfile().name} 思考中...` : !selectedPieceId ? "请选择一枚棋子" : !ghostPos ? "请选择放置的位置" : isValidPlacement ? "点击确认，放置棋子" : "落子不合法"}</div>
+          <div className="status-banner">{!isMyTurn ? `${currentPlayer?.getProfile().name} 思考中...` : !selectedPieceId ? "请选择一枚棋子" : !ghostPos ? "请选择放置的位置" : isValidPlacement ? "点击✅️，放置棋子" : "⚠️落子不合法"}</div>
         </div>
 
         <div className="board-section">
           <div className="board-wrapper">
             <svg viewBox="0 0 600 600" className="main-board">
-              <g transform="translate(20, 20)">
+              <g transform="translate(0, 0)">
                 {useMemo(() => {
                   const cells = [];
-                  for (let r = 0; r < SIDE * 2 - 1; r++) {
-                    const rowWidth = r < SIDE ? SIDE + r : SIDE * 3 - 2 - r;
+                  for (let r = 0; r < SIDE * 2; r++) {
+                    const rowWidth = r < SIDE ? SIDE + r : SIDE * 3 - 1 - r;
                     const xOffset = (SIDE * 2 - 1 - rowWidth);
-                    for (let c = 0; c < rowWidth * 2 - 1; c++) {
+                    for (let c = 0; c < rowWidth * 2 + 1; c++) {
                       const col = c + xOffset;
                       const { x, y } = getPixelCoord(r, col);
                       const isGhost = ghostPos && transformedData.shape.some(o => (ghostPos.r + o.r) === r && (ghostPos.c + o.c) === col);
@@ -186,7 +274,7 @@ function App() {
                   }
                   return cells;
                 }, [board, ghostPos, transformedData, me, isMyTurn, selectedPieceId])}
-                {[ {r:3,c:8},{r:13,c:8},{r:5,c:3},{r:5,c:13},{r:11,c:3},{r:11,c:13} ].map(p => { const { x, y } = getPixelCoord(p.r, p.c); return <circle key={`s-${p.r}-${p.c}`} cx={x} cy={y+H/2} r="3" fill="white" opacity="0.4" pointerEvents="none" />; })}
+                {[{r:3,c:17},{r:6,c:9},{r:6,c:25},{r:11,c:9},{r:11,c:25},{r:14,c:17}].map(p => { const { x, y } = getPixelCoord(p.r, p.c); return <circle key={`s-${p.r}-${p.c}`} cx={x} cy={y+ (getTileDir(p.r, p.c) === 1 ? (H*2/3) : (H/3))} r="3" fill="white" opacity="0.4" pointerEvents="none" />; })}
               </g>
             </svg>
             {isValidPlacement && <button className="fab-btn confirm-btn" onClick={handleConfirm}>✔️</button>}
