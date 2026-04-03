@@ -9,7 +9,7 @@ insertCoin({
   gameId: "YOUR_GAME_ID", // 暂时可以用这个占位，或者留空
   skipLobby: false,
   maxPlayersPerRoom: 4,
-  defaultPlayerState: { score: 0 },
+  defaultPlayerStates: { score: 0 },
 }).then(() => {
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
