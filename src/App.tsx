@@ -81,6 +81,15 @@ function App() {
     }
   }, [turnIndex, sortedPlayers, skippedPlayers, usedPieces, gameEnded]);
 
+  // 回合开始时重置旋转和翻转状态
+  useEffect(() => {
+    if (isMyTurn) {
+      setRotation(0);
+      setFlipV(1);
+      setFlipH(1);
+    }
+  }, [isMyTurn]);
+
   const [selectedPieceId, setSelectedPieceId] = useState<string | null>(null);
   const [rotation, setRotation] = useState(0); 
   const [flipV, setFlipV] = useState(1); 
@@ -283,18 +292,20 @@ function App() {
     return result;
   }, [gameStatus.ended, sortedPlayers, usedPieces]);
 
-  const winner = useMemo((): typeof sortedPlayers[0] | null => {
-    if (!gameStatus.ended) return null;
+  const winner = useMemo((): typeof sortedPlayers[0][] => {
+    if (!gameStatus.ended) return [];
     let maxScore = -Infinity;
-    let winnerPlayer: typeof sortedPlayers[0] | null = null;
+    let winners: typeof sortedPlayers[0][] = [];
     sortedPlayers.forEach(p => {
       const score = scores[p.id]?.score || 0;
       if (score > maxScore) {
         maxScore = score;
-        winnerPlayer = p;
+        winners = [p];
+      } else if (score === maxScore) {
+        winners.push(p);
       }
     });
-    return winnerPlayer;
+    return winners;
   }, [gameStatus.ended, scores, sortedPlayers]);
 
   return (
@@ -312,7 +323,7 @@ function App() {
                   <div className="score-display">
                     <div>剩余: {scores[p.id].pieces}块</div>
                     <div>得分: {scores[p.id].score}</div>
-                    {winner && winner.id === p.id && <div className="winner-crown">👑</div>}
+                    {winner.some(w => w.id === p.id) && <div className="winner-crown">👑</div>}
                   </div>
                 )}
               </div>
@@ -320,7 +331,7 @@ function App() {
           </div>
           <div className="status-banner">
             {gameEnded ? 
-              `游戏结束！${winner ? winner.getProfile().name : '未知玩家'} 获胜！` :
+              `游戏结束！${winner.length > 0 ? winner.map(w => w.getProfile().name).join('、') : '未知玩家'} 获胜！` :
               (!isMyTurn ? `${currentPlayer?.getProfile().name} 思考中...` : 
               !selectedPieceId ? "请选择一枚棋子" : 
               !ghostPos ? "请选择放置的位置" : 
@@ -378,7 +389,7 @@ function App() {
               if (isUsed) return <div key={piece.id} className="piece-card empty"></div>;
 
               return (
-                <div key={piece.id} className={`piece-card ${isSelected ? 'selected' : ''}`} onClick={() => isMyTurn && setSelectedPieceId(`p-${piece.id}`)}>
+                <div key={piece.id} className={`piece-card ${isSelected ? 'selected' : ''}`} onClick={() => isMyTurn && (setSelectedPieceId(`p-${piece.id}`), setRotation(0), setFlipV(1), setFlipH(1))}>
                   <svg width="50" height="50" viewBox="-40 -30 80 60" style={{ pointerEvents: 'none' }}>
                     {piece.shape.map((offset, idx) => {
                       const ms = 20, mh = (ms * Math.sqrt(3)) / 2;
