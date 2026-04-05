@@ -11,8 +11,7 @@ type BoardState = Record<string, string>;
 type UsedPiecesState = Record<string, string[]>;
 
 // --- 1. 核心数学：三角形网格判定 ---
-const getTileDir = (r: number, c: number) => (r + c) % 2 === 0 ? 1 : -1;
-
+const getTileDir = (r: number, c: number) => (r + c) % 2 === 0 ? 1 : -1; 
 const TRI_SIZE = 32; 
 const H = (TRI_SIZE * Math.sqrt(3)) / 2; 
 
@@ -62,18 +61,14 @@ function App() {
 
   // 初始化模式选择
   useEffect(() => {
-    if (sortedPlayers.length > 0 && sortedPlayers[0].id === me?.id && turnIndex === 0 && Object.keys(usedPieces).length === 0) {
+    if (sortedPlayers.length > 0 && sortedPlayers[0].id === me?.id && !gameMode) {
       setShowModeSelection(true);
     }
-  }, [sortedPlayers, me, turnIndex, usedPieces]);
+  }, [sortedPlayers, me, gameMode]);
 
   const handleSelectMode = (mode: "trigon" | "classic") => {
     setGameMode(mode);
     setShowModeSelection(false);
-    // 确保游戏从第一回合开始
-    if (turnIndex === 0) {
-      setTurnIndex(0);
-    }
   };
 
   // 自动跳过被跳过的玩家或已用完棋子的玩家
@@ -86,7 +81,7 @@ function App() {
     
     const usedCount = (usedPieces[currentPlayer.id] || []).length;
     const isSkipped = skippedPlayers[currentPlayer.id];
-    const totalPieces = gameMode === "classic" ? 21 : 22;
+    const totalPieces = gameMode === "trigon" ? 22 : 21;
     const isFinished = usedCount === totalPieces;
     
     // 如果当前玩家已用完所有棋子但还没标记为跳过，自动标记为跳过
@@ -121,16 +116,28 @@ function App() {
 
   const transformedData = useMemo(() => {
     if (gameMode === "classic") {
+      // 经典模式：简单旋转和翻转
       const original = CLASSIC_PIECES.find(p => `p-${p.id}` === selectedPieceId);
-      if (!original) return { shape: [], activeDirection: 1 };
+      if (!original) return { shape: [] };
+
       let newShape = original.shape.map(coord => ({ r: coord.r * flipV, c: coord.c * flipH }));
-      // 经典模式旋转逻辑（顺时针）
-      for (let i = 0; i < rotation; i++) {
-        newShape = newShape.map(pos => ({ r: -pos.c, c: pos.r }));
-      }
-      return { shape: newShape, activeDirection: 1 };
+
+      // 应用旋转 (90度倍数)
+      const rotatePoint = (point: { r: number; c: number }, rot: number) => {
+        let { r, c } = point;
+        for (let i = 0; i < rot; i++) {
+          const temp = r;
+          r = c;
+          c = -temp;
+        }
+        return { r, c };
+      };
+
+      newShape = newShape.map(point => rotatePoint(point, rotation));
+
+      return { shape: newShape };
     } else {
-      // 三角模式逻辑
+      // 三角形模式原有逻辑
       const original = REAL_PIECES.find(p => `p-${p.id}` === selectedPieceId);
       if (!original) return { shape: [], activeDirection: 1 };
       let newShape = original.shape.map(coord => ({ r: coord.r * flipV, c: coord.c * flipH }));
@@ -162,12 +169,8 @@ function App() {
   };
 
   const performSnap = (r: number, c: number) => {
-    // 经典模式不需要吸附，直接返回点击位置
-    if (gameMode === "classic") {
-      return { r, c };
-    }
-    
-    // 三角模式需要考虑方向吸附
+    if (gameMode === "classic") return { r, c }; // 经典模式不需要吸附
+
     const pieceDir = transformedData.activeDirection;
     if (getTileDir(r, c) !== pieceDir) {
       const { sides } = getNeighbors(r, c);
@@ -191,55 +194,15 @@ function App() {
 
     let invalidCondition = 0;
     let hasCorner = false, coversStart = false;
-
-    if (gameMode === "classic") {
-      // 经典模式验证逻辑
-      for (const offset of transformedData.shape) {
-        const r = ghostPos.r + offset.r, c = ghostPos.c + offset.c, key = `${r}-${c}`;
-        if (board[key]) {
-          invalidCondition = 1; // 与已有棋子重叠
-          break;
-        }
-        // 检查20x20网格边界
-        if (r < 0 || r >= 20 || c < 0 || c >= 20) {
-          invalidCondition = 2; // 超出棋盘边界
-          break;
-        }
-        if (isFirstMove) {
-          // 经典模式起始点：四个角落
-          const startPoints = [{r:0,c:0}, {r:0,c:19}, {r:19,c:0}, {r:19,c:19}];
-          if (startPoints.some(p => p.r === r && p.c === c)) {
-            coversStart = true;
-          }
-        }
-        // 经典模式：不能与己方棋子边相邻，只能与角相邻
-        const neighbors = [
-          {r: r-1, c: c}, {r: r+1, c: c}, {r: r, c: c-1}, {r: r, c: c+1}, // 边
-          {r: r-1, c: c-1}, {r: r-1, c: c+1}, {r: r+1, c: c-1}, {r: r+1, c: c+1} // 角
-        ];
-        for (const n of neighbors) {
-          const nKey = `${n.r}-${n.c}`;
-          if (board[nKey] === myColor) {
-            const isEdge = (n.r === r && Math.abs(n.c - c) === 1) || (n.c === c && Math.abs(n.r - r) === 1);
-            if (isEdge) {
-              invalidCondition = 4; // 与己方棋子边相邻
-              break;
-            } else {
-              hasCorner = true;
-            }
-          }
-        }
-        if (invalidCondition > 0) break;
+    for (const offset of transformedData.shape) {
+      const r = ghostPos.r + offset.r, c = ghostPos.c + offset.c, key = `${r}-${c}`;
+      if (board[key]){
+        invalidCondition = 1; // 与已有棋子重叠
+        break;
       }
-    } else {
-      // 三角模式验证逻辑
-      for (const offset of transformedData.shape) {
-        const r = ghostPos.r + offset.r, c = ghostPos.c + offset.c, key = `${r}-${c}`;
-        if (board[key]){
-          invalidCondition = 1; // 与已有棋子重叠
-          break;
-        }
-        // 检查棋盘边界（上下左右）
+
+      if (gameMode === "trigon") {
+        // 三角形模式边界检查
         if (r < 0 || r > 17 || c < (r < 9 ? 8 - r : r - 9) || c > (r < 9 ? r + 26 : 43 - r)) {
           invalidCondition = 2; // 超出棋盘边界
           break;
@@ -263,21 +226,51 @@ function App() {
             hasCorner = true;
           }
         }
+      } else {
+        // 经典模式边界检查
+        if (r < 0 || r >= 20 || c < 0 || c >= 20) {
+          invalidCondition = 2; // 超出棋盘边界
+          break;
+        }
+        if (isFirstMove){
+          const startPoints = [{r:0,c:0},{r:0,c:19},{r:19,c:0},{r:19,c:19}];
+          if (startPoints.some(p => p.r === r && p.c === c)){
+            coversStart = true;
+          }
+        }
+        // 经典模式邻接检查：不能与己方边相邻，必须与角相邻（非第一手）
+        const neighbors = [
+          {r: r-1, c: c}, {r: r+1, c: c}, {r: r, c: c-1}, {r: r, c: c+1} // 边
+        ];
+        const corners = [
+          {r: r-1, c: c-1}, {r: r-1, c: c+1}, {r: r+1, c: c-1}, {r: r+1, c: c+1} // 角
+        ];
+        for (const n of neighbors){
+          if (board[`${n.r}-${n.c}`] === myColor){
+            invalidCondition = 4; // 与己方棋子边接
+            break;
+          }
+        }
+        if (invalidCondition > 0) break;
+        for (const cor of corners){
+          if (board[`${cor.r}-${cor.c}`] === myColor){
+            hasCorner = true;
+          }
+        }
       }
     }
-
     if (invalidCondition === 0) {
       if (isFirstMove && !coversStart){
         invalidCondition = 3; // 第一手必须覆盖起始点
       }
       else if (!isFirstMove && !hasCorner){
-        invalidCondition = 5; // 没有与己方棋子角接
+        invalidCondition = 5; // 没有与己方棋子的角相连
       }
     }
     return { valid: invalidCondition === 0, reason: invalidCondition };
   }, [isMyTurn, selectedPieceId, ghostPos, transformedData, board, me, gameMode]);
 
-  // --- 4. 落子并记录棋子消耗 ---
+  const getNeighbors = (r: number, c: number) => {
   const handleConfirm = () => {
     if (!isValidPlacement.valid || !selectedPieceId || !me) return;
     const newBoard = { ...board };
@@ -302,9 +295,9 @@ function App() {
   };
 
   const handleRestart = () => {
-    // 只有房主（第一个玩家）可以重新开始戏戏
+    // 只有房主（第一个玩家）可以重新开始游戏
     if (!me || sortedPlayers[0]?.id !== me.id) return;
-    
+
     const confirmed = window.confirm("确定要重新开始游戏吗？所有进度将被重置。");
     if (confirmed) {
       // 重置所有游戏状态
@@ -313,17 +306,16 @@ function App() {
       setUsedPieces({});
       setSkippedPlayers({});
       setGameEnded(false);
-      setGameMode("trigon"); // 重置为默认模式
-      
+
+      // 显示模式选择
+      setShowModeSelection(true);
+
       // 重置本地状态
       setSelectedPieceId(null);
       setRotation(0);
       setFlipV(1);
       setFlipH(1);
       setGhostPos(null);
-      
-      // 显示模式选择界面
-      setShowModeSelection(true);
     }
   };
 
@@ -338,6 +330,8 @@ function App() {
       setGhostPos(null);
     }
   };
+
+  // 检查游戏是否结束
   const gameStatus = useMemo(() => {
     if (gameEnded) return { ended: true };
     
@@ -354,28 +348,27 @@ function App() {
   // 计算得分
   const scores = useMemo(() => {
     if (!gameStatus.ended) return {};
-    
+
+    const totalPieces = gameMode === "trigon" ? 22 : 21;
     const result: Record<string, { score: number, pieces: number }> = {};
-    const totalPieces = gameMode === "classic" ? 21 : 22;
-    const piecesData = gameMode === "classic" ? CLASSIC_PIECES : REAL_PIECES;
-    
     sortedPlayers.forEach(p => {
       const usedCount = (usedPieces[p.id] || []).length;
       const remainingPieces = totalPieces - usedCount;
       let score = 0;
-      
+
       if (remainingPieces === 0) {
         score = 15; // 全部下完得15分
       } else {
         // 计算剩余棋子的总格子数
-        const remainingPieceIds = piecesData.filter(piece => !usedPieces[p.id]?.includes(piece.id));
+        const remainingPieceIds = (gameMode === "trigon" ? REAL_PIECES : CLASSIC_PIECES)
+          .filter(piece => !usedPieces[p.id]?.includes(piece.id));
         const totalCells = remainingPieceIds.reduce((sum, piece) => sum + piece.shape.length, 0);
         score = -totalCells; // 每个格子减一分
       }
-      
+
       result[p.id] = { score, pieces: remainingPieces };
     });
-    
+
     return result;
   }, [gameStatus.ended, sortedPlayers, usedPieces, gameMode]);
 
@@ -401,10 +394,6 @@ function App() {
         <ModeSelection onSelectMode={handleSelectMode} />
       ) : (
         <div className="iphone-container">
-          {me && sortedPlayers[0]?.id === me.id && (
-            <button className="restart-btn-top" onClick={handleRestart}>🔄</button>
-          )}
-
           <div className="header-section">
             <div className="avatar-row">
               {sortedPlayers.map((p, i) => (
@@ -449,39 +438,41 @@ function App() {
               selectedPieceId={selectedPieceId}
               onTileClick={(r, c) => setGhostPos(performSnap(r, c))}
             />
+            {isValidPlacement.valid && <button className="fab-btn confirm-btn" onClick={handleConfirm}>✅️</button>}
+            {isMyTurn && <button className="fab-btn surrender-btn" onClick={handleSurrender}>🏳️</button>}
+            {me && sortedPlayers[0]?.id === me.id && <button className="fab-btn restart-btn" onClick={handleRestart}>🔄</button>}
           </div>
 
-          <div className={`controls-row ${!isMyTurn ? 'controls-placeholder' : ''}`}>
-            {isMyTurn && (
+          <div className="controls-row">
+            {gameMode === "trigon" ? (
               <>
-                <button className="control-button" onClick={handleSurrender}>🏳️</button>
-                <button className="control-button" onClick={() => setFlipV(v => -v)}>↕️</button>
-                <button className="control-button" onClick={() => setFlipH(h => -h)}>↔️</button>
-                <button className="control-button" onClick={() => setRotation(r => (r + 1) % (gameMode === "classic" ? 4 : 6))}>↪️</button>
-                <button className="control-button" onClick={() => setRotation(r => (r + (gameMode === "classic" ? 3 : 5)) % (gameMode === "classic" ? 4 : 6))}>↩️</button>
-                {isValidPlacement.valid ? (
-                  <button className="control-button" onClick={handleConfirm}>✅️</button>
-                ) : (
-                  <div className="control-button-placeholder"></div>
-                )}
+                <button onClick={() => setFlipV(v => -v)}>↕️</button>
+                <button onClick={() => setFlipH(h => -h)}>↔️</button>
+                <button onClick={() => setRotation(r => (r + 1) % 6)}>↪️</button>
+                <button onClick={() => setRotation(r => (r + 5) % 6)}>↩️</button>
+              </>
+            ) : (
+              <>
+                <button onClick={() => setFlipV(v => -v)}>↕️</button>
+                <button onClick={() => setFlipH(h => -h)}>↔️</button>
+                <button onClick={() => setRotation(r => (r + 1) % 4)}>↻</button>
+                <button onClick={() => setRotation(r => (r + 3) % 4)}>↺</button>
               </>
             )}
           </div>
 
-          <div className="inventory-section">
-            <PieceInventory
-              mode={gameMode}
-              usedPieces={usedPieces}
-              selectedPieceId={selectedPieceId}
-              isMyTurn={isMyTurn}
-              onSelectPiece={(pieceId) => {
-                setSelectedPieceId(pieceId);
-                setRotation(0);
-                setFlipV(1);
-                setFlipH(1);
-              }}
-            />
-          </div>
+          <PieceInventory
+            mode={gameMode}
+            usedPieces={usedPieces}
+            selectedPieceId={selectedPieceId}
+            isMyTurn={isMyTurn}
+            onSelectPiece={(id) => {
+              setSelectedPieceId(id);
+              setRotation(0);
+              setFlipV(1);
+              setFlipH(1);
+            }}
+          />
 
           <div className="footer-scroll">
             <div className="scroll-indicator"></div>
@@ -489,12 +480,11 @@ function App() {
             {sortedPlayers.filter(p => p.id !== me?.id).map(p => {
               const playerColor = p.getProfile().color.hexString;
               const usedIds = usedPieces[p.id] || [];
-              const piecesData = gameMode === "classic" ? CLASSIC_PIECES : REAL_PIECES;
               return (
                 <div key={p.id} className="other-player-section">
                   <div className="other-player-header" style={{color: playerColor}}>{p.getProfile().name}</div>
                   <div className="other-player-piece-grid">
-                    {piecesData.map(piece => {
+                    {(gameMode === "trigon" ? REAL_PIECES : CLASSIC_PIECES).map(piece => {
                       const isUsed = usedIds.includes(piece.id);
                       if (isUsed) return <div key={piece.id} className="piece-card other-empty"></div>;
                       
@@ -502,31 +492,17 @@ function App() {
                         <div key={piece.id} className="piece-card other-piece">
                           <svg width="50" height="50" viewBox="-40 -30 80 60" style={{ pointerEvents: 'none' }}>
                             {piece.shape.map((offset, idx) => {
-                              if (gameMode === "classic") {
-                                // 正方形渲染逻辑（放大 2 倍）
-                                const scale = 2;
-                                const size = 8 * scale;
-                                return (
-                                  <rect
-                                    key={idx}
-                                    x={offset.c * size - size / 2}
-                                    y={offset.r * size - size / 2}
-                                    width={size}
-                                    height={size}
-                                    fill={playerColor}
-                                    fillOpacity={0.7}
-                                    stroke="#333"
-                                    strokeWidth="1"
-                                  />
-                                );
-                              } else {
-                                // 三角形渲染逻辑（放大 1.1 倍）
-                                const scale = 1.1;
-                                const ms = 20 * scale, mh = (ms * Math.sqrt(3)) / 2;
+                              if (gameMode === "trigon") {
+                                // 三角形渲染逻辑
+                                const ms = 20, mh = (ms * Math.sqrt(3)) / 2;
                                 const mx = offset.c * (ms / 2), my = offset.r * mh;
-                                const isUp = (piece as any).direction === 1 ? (offset.r + offset.c) % 2 === 0 : (offset.r + offset.c) % 2 !== 0;
+                                const isUp = piece.direction === 1 ? (offset.r + offset.c) % 2 === 0 : (offset.r + offset.c) % 2 !== 0;
                                 const pts = isUp ? `${mx},${my} ${mx-ms/2},${my+mh} ${mx+ms/2},${my+mh}` : `${mx},${my+mh} ${mx-ms/2},${my} ${mx+ms/2},${my}`;
                                 return <polygon key={idx} points={pts} fill={playerColor} fillOpacity={0.7} stroke="#333" strokeWidth="1" />;
+                              } else {
+                                // 正方形渲染逻辑
+                                const size = 8;
+                                return <rect key={idx} x={offset.c * size - size / 2} y={offset.r * size - size / 2} width={size} height={size} fill={playerColor} fillOpacity={0.7} stroke="#333" strokeWidth="1" />;
                               }
                             })}
                           </svg>
