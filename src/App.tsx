@@ -94,7 +94,7 @@ function App() {
     const activeDirection = original.direction * flipV * (rotation % 2 === 0 ? 1 : -1);
     const cx_offset = H / 3 * ((original.direction * flipV === 1) ? -1 : 1);
     newShape = newShape.map(pos => {
-      const cx = pos.r * H + ((pos.r % 2 === pos.c % 2)? 0 : cx_offset);
+      const cx = pos.r * H + ((pos.r + pos.c) % 2 === 0 ? 0 : cx_offset);
       const cy = pos.c * 0.5 * TRI_SIZE;
       const cx_new = cx * Math.cos(Math.PI / 3 * rotation) - cy * Math.sin(Math.PI / 3 * rotation);
       const cy_new = cx * Math.sin(Math.PI / 3 * rotation) + cy * Math.cos(Math.PI / 3 * rotation);
@@ -336,7 +336,7 @@ function App() {
 
         <div className="board-section">
           <div className="board-wrapper">
-            <svg viewBox="0 0 600 600" className="main-board">
+            <svg viewBox="0 36 600 526" className="main-board">
               <g transform="translate(0, 0)">
                 {useMemo(() => {
                   const cells = [];
@@ -356,7 +356,7 @@ function App() {
                 {[{r:3,c:17},{r:6,c:9},{r:6,c:25},{r:11,c:9},{r:11,c:25},{r:14,c:17}].map(p => { const { x, y } = getPixelCoord(p.r, p.c); return <circle key={`s-${p.r}-${p.c}`} cx={x} cy={y+ (getTileDir(p.r, p.c) === 1 ? (H*2/3) : (H/3))} r="3" fill="white" opacity="0.4" pointerEvents="none" />; })}
               </g>
             </svg>
-            {isValidPlacement.valid && <button className="fab-btn confirm-btn" onClick={handleConfirm}>✔️</button>}
+            {isValidPlacement.valid && <button className="fab-btn confirm-btn" onClick={handleConfirm}>✅️</button>}
             {isMyTurn && <button className="fab-btn surrender-btn" onClick={handleSurrender}>🏳️</button>}
             {me && sortedPlayers[0]?.id === me.id && <button className="fab-btn restart-btn" onClick={handleRestart}>🔄</button>}
           </div>
@@ -365,8 +365,8 @@ function App() {
         <div className="controls-row">
           <button onClick={() => setFlipV(v => -v)}>↕️</button>
           <button onClick={() => setFlipH(h => -h)}>↔️</button>
-          <button onClick={() => setRotation(r => (r + 1) % 6)}>↺</button>
-          <button onClick={() => setRotation(r => (r + 5) % 6)}>↻</button>
+          <button onClick={() => setRotation(r => (r + 1) % 6)}>↪️</button>
+          <button onClick={() => setRotation(r => (r + 5) % 6)}>↩️</button>
         </div>
 
         <div className="inventory-section">
@@ -398,11 +398,31 @@ function App() {
           <div className="scroll-indicator"></div>
           <p className="section-title">其他玩家剩余情况</p>
           {sortedPlayers.filter(p => p.id !== me?.id).map(p => {
-            const count = 22 - (usedPieces[p.id] || []).length;
+            const playerColor = p.getProfile().color.hexString;
+            const usedIds = usedPieces[p.id] || [];
             return (
-              <div key={p.id} className="other-player-card">
-                <span style={{color: p.getProfile().color.hexString}}>{p.getProfile().name}</span>
-                <span>剩余 {count} 块</span>
+              <div key={p.id} className="other-player-section">
+                <div className="other-player-header" style={{color: playerColor}}>{p.getProfile().name}</div>
+                <div className="other-player-piece-grid">
+                  {REAL_PIECES.map(piece => {
+                    const isUsed = usedIds.includes(piece.id);
+                    if (isUsed) return <div key={piece.id} className="piece-card other-empty"></div>;
+                    
+                    return (
+                      <div key={piece.id} className="piece-card other-piece">
+                        <svg width="50" height="50" viewBox="-40 -30 80 60" style={{ pointerEvents: 'none' }}>
+                          {piece.shape.map((offset, idx) => {
+                            const ms = 20, mh = (ms * Math.sqrt(3)) / 2;
+                            const mx = offset.c * (ms / 2), my = offset.r * mh;
+                            const isUp = piece.direction === 1 ? (offset.r + offset.c) % 2 === 0 : (offset.r + offset.c) % 2 !== 0;
+                            const pts = isUp ? `${mx},${my} ${mx-ms/2},${my+mh} ${mx+ms/2},${my+mh}` : `${mx},${my+mh} ${mx-ms/2},${my} ${mx+ms/2},${my}`;
+                            return <polygon key={idx} points={pts} fill={playerColor} fillOpacity={0.7} stroke="#333" strokeWidth="1" />;
+                          })}
+                        </svg>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             );
           })}
