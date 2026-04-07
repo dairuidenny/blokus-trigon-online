@@ -52,6 +52,7 @@ function App() {
   const [turnIndex, setTurnIndex] = useMultiplayerState("turnIndex", 0);
   const [usedPieces, setUsedPieces] = useMultiplayerState<UsedPiecesState>("usedPieces", {}); // { playerId: [pieceIds] }
   const [skippedPlayers, setSkippedPlayers] = useMultiplayerState<Record<string, boolean>>("skippedPlayers", {}); // 跳过玩家
+  const [pendingPlacement, setPendingPlacement] = useMultiplayerState<Record<string, boolean>>("pendingPlacement", {}); // { playerId: true }
   const [gameEnded, setGameEnded] = useMultiplayerState("gameEnded", false);
   const [gameMode, setGameMode] = useMultiplayerState<"trigon" | "classic">("gameMode", "trigon");
 
@@ -86,9 +87,13 @@ function App() {
     
     const usedCount = (usedPieces[currentPlayer.id] || []).length;
     const isSkipped = skippedPlayers[currentPlayer.id];
+    const isPlacing = pendingPlacement[currentPlayer.id];
     const totalPieces = gameMode === "classic" ? 21 : 22;
     const isFinished = usedCount === totalPieces;
     
+    // 如果当前玩家正在进行未确认的放置，则不要自动跳过
+    if (isPlacing) return;
+
     // 如果当前玩家已用完所有棋子但还没标记为跳过，自动标记为跳过
     if (isFinished && !isSkipped) {
       const newSkipped = { ...skippedPlayers, [currentPlayer.id]: true };
@@ -119,33 +124,82 @@ function App() {
   const [flipH, setFlipH] = useState(1); 
   const [ghostPos, setGhostPos] = useState<{ r: number, c: number } | null>(null);
 
-  const transformedData = useMemo(() => {
+  const getDefaultGhostPos = () => {
+    return gameMode === "classic" ? { r: 9, c: 9 } : { r: 8, c: 17 };
+  };
+
+  const getTransformedDataFor = (
+    pieceId: string | null,
+    rotationValue: number,
+    flipVValue: number,
+    flipHValue: number
+  ) => {
     if (gameMode === "classic") {
-      const original = CLASSIC_PIECES.find(p => `p-${p.id}` === selectedPieceId);
+      const original = CLASSIC_PIECES.find(p => `p-${p.id}` === pieceId);
       if (!original) return { shape: [], activeDirection: 1 };
-      let newShape = original.shape.map(coord => ({ r: coord.r * flipV, c: coord.c * flipH }));
+      let newShape = original.shape.map(coord => ({ r: coord.r * flipVValue, c: coord.c * flipHValue }));
       // 经典模式旋转逻辑（顺时针）
-      for (let i = 0; i < rotation; i++) {
+      for (let i = 0; i < rotationValue; i++) {
         newShape = newShape.map(pos => ({ r: -pos.c, c: pos.r }));
       }
       return { shape: newShape, activeDirection: 1 };
     } else {
-      // 三角模式逻辑
-      const original = REAL_PIECES.find(p => `p-${p.id}` === selectedPieceId);
+      const original = REAL_PIECES.find(p => `p-${p.id}` === pieceId);
       if (!original) return { shape: [], activeDirection: 1 };
-      let newShape = original.shape.map(coord => ({ r: coord.r * flipV, c: coord.c * flipH }));
-      const activeDirection = original.direction * flipV * (rotation % 2 === 0 ? 1 : -1);
-      const cx_offset = H / 3 * ((original.direction * flipV === 1) ? -1 : 1);
+      let newShape = original.shape.map(coord => ({ r: coord.r * flipVValue, c: coord.c * flipHValue }));
+      const activeDirection = original.direction * flipVValue * (rotationValue % 2 === 0 ? 1 : -1);
+      const cx_offset = H / 3 * ((original.direction * flipVValue === 1) ? -1 : 1);
       newShape = newShape.map(pos => {
         const cx = pos.r * H + ((pos.r + pos.c) % 2 === 0 ? 0 : cx_offset);
         const cy = pos.c * 0.5 * TRI_SIZE;
-        const cx_new = cx * Math.cos(Math.PI / 3 * rotation) - cy * Math.sin(Math.PI / 3 * rotation);
-        const cy_new = cx * Math.sin(Math.PI / 3 * rotation) + cy * Math.cos(Math.PI / 3 * rotation);
+        const cx_new = cx * Math.cos(Math.PI / 3 * rotationValue) - cy * Math.sin(Math.PI / 3 * rotationValue);
+        const cy_new = cx * Math.sin(Math.PI / 3 * rotationValue) + cy * Math.cos(Math.PI / 3 * rotationValue);
         return { r: Math.floor(cx_new / H + 0.5), c: Math.floor(cy_new / (0.5 * TRI_SIZE) + 0.5) };
       });
       return { shape: newShape, activeDirection };
     }
-  }, [selectedPieceId, rotation, flipV, flipH, gameMode]);
+  };
+
+  const performSnapForPiece = (
+    r: number,
+    c: number,
+    pieceId: string,
+    rotationValue: number,
+    flipVValue: number
+  ) => {
+    if (gameMode === "classic") {
+      return { r, c };
+    }
+
+    const original = REAL_PIECES.find(p => `p-${p.id}` === pieceId);
+    if (!original) {
+      return { r, c };
+    }
+
+    const activeDirection = original.direction * flipVValue * (rotationValue % 2 === 0 ? 1 : -1);
+    if (getTileDir(r, c) !== activeDirection) {
+      const { sides } = getNeighbors(r, c);
+      const [nr, nc] = sides[0].split("-").map(Number);
+      return { r: nr, c: nc };
+    }
+    return { r, c };
+  };
+
+  const handleSelectPiece = (pieceId: string) => {
+    setSelectedPieceId(pieceId);
+    setRotation(0);
+    setFlipV(1);
+    setFlipH(1);
+    setGhostPos(prev => {
+      const target = prev || getDefaultGhostPos();
+      return performSnapForPiece(target.r, target.c, pieceId, 0, 1);
+    });
+    if (me) {
+      setPendingPlacement({ ...pendingPlacement, [me.id]: true });
+    }
+  };
+
+  const transformedData = useMemo(() => getTransformedDataFor(selectedPieceId, rotation, flipV, flipH), [selectedPieceId, rotation, flipV, flipH, gameMode]);
 
   const getNeighbors = (r: number, c: number) => {
     const isUp = getTileDir(r, c) === 1;
@@ -296,6 +350,7 @@ function App() {
 
     setBoard(newBoard); 
     setUsedPieces(newUsed);
+    setPendingPlacement({ ...pendingPlacement, [me.id]: false });
     setTurnIndex(turnIndex + 1);
     setGhostPos(null); 
     setSelectedPieceId(null);
@@ -312,6 +367,7 @@ function App() {
       setTurnIndex(0);
       setUsedPieces({});
       setSkippedPlayers({});
+      setPendingPlacement({});
       setGameEnded(false);
       setGameMode("trigon"); // 重置为默认模式
       
@@ -333,6 +389,7 @@ function App() {
     if (confirmed) {
       const newSkipped = { ...skippedPlayers, [me.id]: true };
       setSkippedPlayers(newSkipped);
+      setPendingPlacement({ ...pendingPlacement, [me.id]: false });
       setTurnIndex(turnIndex + 1);
       setSelectedPieceId(null);
       setGhostPos(null);
@@ -427,7 +484,7 @@ function App() {
               {gameEnded ? 
                 `游戏结束！${winner.length > 0 ? winner.map(w => w.getProfile().name).join('、') : '未知玩家'} 获胜！` :
                 (!isMyTurn ? `${currentPlayer?.getProfile().name} 思考中...` : 
-                !selectedPieceId ? "请选择一枚棋子" : 
+                !selectedPieceId ? "选择一枚棋子，在棋盘上拖动放置" : 
                 !ghostPos ? "请选择放置的位置" : 
                 isValidPlacement.valid ? "点击✅️，放置棋子" : 
                 isValidPlacement.reason === 1 ? "⚠️与其他棋子重叠" : 
@@ -448,6 +505,7 @@ function App() {
               isMyTurn={isMyTurn}
               selectedPieceId={selectedPieceId}
               onTileClick={(r, c) => setGhostPos(performSnap(r, c))}
+              onTileDrag={(r, c) => setGhostPos(performSnap(r, c))}
             />
           </div>
 
@@ -474,12 +532,7 @@ function App() {
               usedPieces={usedPieces}
               selectedPieceId={selectedPieceId}
               isMyTurn={isMyTurn}
-              onSelectPiece={(pieceId) => {
-                setSelectedPieceId(pieceId);
-                setRotation(0);
-                setFlipV(1);
-                setFlipH(1);
-              }}
+              onSelectPiece={handleSelectPiece}
             />
           </div>
 
