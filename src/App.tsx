@@ -44,7 +44,63 @@ export const REAL_PIECES = [
 
 function App() {
   const players = usePlayersList();
-  const sortedPlayers = useMemo(() => [...players].sort((a, b) => a.id.localeCompare(b.id)), [players]);
+  const humanPlayers = useMemo(() => [...players].sort((a, b) => a.id.localeCompare(b.id)), [players]);
+  
+  // Fixed team colors for all players (both human and AI)
+  const TEAM_COLORS = ["#d64545", "#4b7bec", "#20bf6b", "#f39c12"];
+  
+  // Function to get consistent team color for any player based on their ID
+  const getTeamColor = (playerId: string) => {
+    let hash = 0;
+    for (let i = 0; i < playerId.length; i++) {
+      hash = ((hash << 5) - hash) + playerId.charCodeAt(i);
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+    return TEAM_COLORS[Math.abs(hash) % TEAM_COLORS.length];
+  };
+  
+  const aiPlayers = useMemo(() => {
+    const needed = Math.max(0, 4 - humanPlayers.length);
+    return Array.from({ length: needed }, (_, idx) => {
+      const aiId = `ai-${idx + 1}`;
+      const teamColor = getTeamColor(aiId);
+      
+      // Generate random background color for AI avatar (different from team color)
+      const randomColor = `rgb(${Math.floor(Math.random() * 256)}, ${Math.floor(Math.random() * 256)}, ${Math.floor(Math.random() * 256)})`;
+      const rgbToHex = (rgb: string) => {
+        const match = rgb.match(/\d+/g);
+        if (!match) return "#808080";
+        const [r, g, b] = match.map(Number);
+        return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
+      };
+      const avatarBgColor = rgbToHex(randomColor);
+      
+      // Create SVG with random background and robot emoji
+      const svgStr = `<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40'><defs><linearGradient id='grad${idx}' x1='0%' y1='0%' x2='100%' y2='100%'><stop offset='0%' style='stop-color:${avatarBgColor};stop-opacity:1' /><stop offset='100%' style='stop-color:${avatarBgColor}cc;stop-opacity:1' /></linearGradient></defs><rect width='40' height='40' fill='url(#grad${idx})'/><text x='50%' y='50%' font-size='24' text-anchor='middle' dominant-baseline='central'>🤖</text></svg>`;
+      const photoUrl = `data:image/svg+xml,${encodeURIComponent(svgStr)}`;
+      
+      return {
+        id: aiId,
+        getProfile: () => ({
+          name: `AI ${idx + 1}`,
+          photo: photoUrl,
+          color: { hexString: teamColor }, // Team color for border and pieces
+        }),
+      };
+    });
+  }, [humanPlayers.length]);
+  
+  // Override human players' colors to use consistent team colors
+  const allPlayers = useMemo(() => {
+    const playersWithColors = humanPlayers.map(p => ({
+      ...p,
+      getProfile: () => ({
+        ...p.getProfile(),
+        color: { hexString: getTeamColor(p.id) },
+      }),
+    }));
+    return [...playersWithColors, ...aiPlayers];
+  }, [humanPlayers, aiPlayers]);
   const me = myPlayer();
 
   // --- 3. 联机状态 ---
@@ -58,15 +114,16 @@ function App() {
 
   const [showModeSelection, setShowModeSelection] = useState(false);
 
-  const currentPlayer = sortedPlayers[turnIndex % sortedPlayers.length];
+  const currentPlayer = allPlayers[turnIndex % allPlayers.length];
   const isMyTurn = currentPlayer?.id === me?.id && !gameEnded;
+  const isAiTurn = currentPlayer?.id.startsWith("ai-") && !gameEnded && !skippedPlayers[currentPlayer.id];
 
   // 初始化模式选择
   useEffect(() => {
-    if (sortedPlayers.length > 0 && sortedPlayers[0].id === me?.id && turnIndex === 0 && Object.keys(usedPieces).length === 0) {
+    if (humanPlayers.length > 0 && humanPlayers[0].id === me?.id && turnIndex === 0 && Object.keys(usedPieces).length === 0) {
       setShowModeSelection(true);
     }
-  }, [sortedPlayers, me, turnIndex, usedPieces]);
+  }, [humanPlayers, me, turnIndex, usedPieces]);
 
   const handleSelectMode = (mode: "trigon" | "classic") => {
     setGameMode(mode);
@@ -81,8 +138,8 @@ function App() {
   useEffect(() => {
     if (gameEnded) return;
     
-    const currentIndex = turnIndex % sortedPlayers.length;
-    const currentPlayer = sortedPlayers[currentIndex];
+    const currentIndex = turnIndex % allPlayers.length;
+    const currentPlayer = allPlayers[currentIndex];
     if (!currentPlayer) return;
     
     const usedCount = (usedPieces[currentPlayer.id] || []).length;
@@ -99,7 +156,7 @@ function App() {
       const newSkipped = { ...skippedPlayers, [currentPlayer.id]: true };
       setSkippedPlayers(newSkipped);
       // 检查是否所有玩家都被跳过
-      if (sortedPlayers.every(p => newSkipped[p.id])) {
+      if (allPlayers.every(p => newSkipped[p.id])) {
         setGameEnded(true);
       }
     }
@@ -107,7 +164,7 @@ function App() {
     else if (isSkipped) {
       setTurnIndex(turnIndex + 1);
     }
-  }, [turnIndex, sortedPlayers, skippedPlayers, usedPieces, gameEnded]);
+  }, [turnIndex, allPlayers, skippedPlayers, usedPieces, gameEnded]);
 
   // 回合开始时重置旋转和翻转状态
   useEffect(() => {
@@ -198,6 +255,178 @@ function App() {
       setPendingPlacement({ ...pendingPlacement, [me.id]: true });
     }
   };
+
+  const getAiAvailablePieces = (playerId: string) => {
+    const used = usedPieces[playerId] || [];
+    const allIds = gameMode === "classic"
+      ? CLASSIC_PIECES.map(p => `p-${p.id}`)
+      : REAL_PIECES.map(p => `p-${p.id}`);
+    return allIds.filter(id => !used.includes(id.replace("p-", "")));
+  };
+
+  const evaluatePlacement = (
+    transformed: { shape: { r: number; c: number }[]; activeDirection: number },
+    r: number,
+    c: number,
+    myColor: string,
+    isFirstMove: boolean
+  ) => {
+    let invalidCondition = 0;
+    let hasCorner = false;
+    let coversStart = false;
+    let cornerCount = 0;
+
+    if (gameMode === "classic") {
+      for (const offset of transformed.shape) {
+        const rr = r + offset.r;
+        const cc = c + offset.c;
+        const key = `${rr}-${cc}`;
+        if (board[key]) {
+          invalidCondition = 1;
+          break;
+        }
+        if (rr < 0 || rr >= 20 || cc < 0 || cc >= 20) {
+          invalidCondition = 2;
+          break;
+        }
+        if (isFirstMove) {
+          const startPoints = [{ r: 0, c: 0 }, { r: 0, c: 19 }, { r: 19, c: 0 }, { r: 19, c: 19 }];
+          if (startPoints.some(p => p.r === rr && p.c === cc)) coversStart = true;
+        }
+        const neighbors = [
+          { r: rr - 1, c: cc }, { r: rr + 1, c: cc }, { r: rr, c: cc - 1 }, { r: rr, c: cc + 1 },
+          { r: rr - 1, c: cc - 1 }, { r: rr - 1, c: cc + 1 }, { r: rr + 1, c: cc - 1 }, { r: rr + 1, c: cc + 1 },
+        ];
+        for (const n of neighbors) {
+          const nKey = `${n.r}-${n.c}`;
+          if (board[nKey] === myColor) {
+            const isEdge = (n.r === rr && Math.abs(n.c - cc) === 1) || (n.c === cc && Math.abs(n.r - rr) === 1);
+            if (isEdge) {
+              invalidCondition = 4;
+              break;
+            } else {
+              hasCorner = true;
+              cornerCount += 1;
+            }
+          }
+        }
+        if (invalidCondition > 0) break;
+      }
+    } else {
+      for (const offset of transformed.shape) {
+        const rr = r + offset.r;
+        const cc = c + offset.c;
+        const key = `${rr}-${cc}`;
+        if (board[key]) {
+          invalidCondition = 1;
+          break;
+        }
+        if (rr < 0 || rr > 17 || cc < (rr < 9 ? 8 - rr : rr - 9) || cc > (rr < 9 ? rr + 26 : 43 - rr)) {
+          invalidCondition = 2;
+          break;
+        }
+        if (isFirstMove) {
+          const startPoints = [{ r: 3, c: 17 }, { r: 6, c: 9 }, { r: 6, c: 25 }, { r: 11, c: 9 }, { r: 11, c: 25 }, { r: 14, c: 17 }];
+          if (startPoints.some(p => p.r === rr && p.c === cc)) coversStart = true;
+        }
+        const { sides, corners } = getNeighbors(rr, cc);
+        for (const s of sides) {
+          if (board[s] === myColor) {
+            invalidCondition = 4;
+            break;
+          }
+        }
+        if (invalidCondition > 0) break;
+        for (const cor of corners) {
+          if (board[cor] === myColor) {
+            hasCorner = true;
+            cornerCount += 1;
+          }
+        }
+      }
+    }
+
+    if (invalidCondition === 0) {
+      if (isFirstMove && !coversStart) invalidCondition = 3;
+      else if (!isFirstMove && !hasCorner) invalidCondition = 5;
+    }
+
+    if (invalidCondition !== 0) return null;
+
+    return 1000 + transformed.shape.length * 10 + cornerCount * 5 + (coversStart ? 200 : 0);
+  };
+
+  const chooseBestAiMove = (aiId: string) => {
+    const availablePieces = getAiAvailablePieces(aiId);
+    if (availablePieces.length === 0) return null;
+
+    const myColor = allPlayers.find(p => p.id === aiId)?.getProfile().color.hexString || "#888";
+    const isFirstMove = !Object.values(board).includes(myColor || "");
+    let bestMove: any = null;
+    let bestScore = -Infinity;
+
+    const rowCount = gameMode === "classic" ? 20 : 18;
+
+    for (const pieceId of availablePieces) {
+      const flipOptions = [[1, 1], [1, -1], [-1, 1], [-1, -1]];
+      const rotateCount = gameMode === "classic" ? 4 : 6;
+
+      for (const [flipVOption, flipHOption] of flipOptions) {
+        for (let rotationOption = 0; rotationOption < rotateCount; rotationOption++) {
+          const transformed = getTransformedDataFor(pieceId, rotationOption, flipVOption, flipHOption);
+
+          for (let r = 0; r < rowCount; r++) {
+            const minCol = gameMode === "classic" ? 0 : (r < 9 ? 8 - r : r - 9);
+            const maxCol = gameMode === "classic" ? 19 : (r < 9 ? r + 26 : 43 - r);
+            for (let c = minCol; c <= maxCol; c++) {
+              const snapped = performSnapForPiece(r, c, pieceId, rotationOption, flipVOption);
+              if (snapped.r !== r || snapped.c !== c) continue;
+
+              const score = evaluatePlacement(transformed, r, c, myColor || "", isFirstMove);
+              if (score !== null && score > bestScore) {
+                bestScore = score;
+                bestMove = { pieceId, r, c, rotationOption, flipVOption, flipHOption, transformed };
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return bestMove;
+  };
+
+  const runAiTurn = (aiId: string) => {
+    const aiPlayer = allPlayers.find(p => p.id === aiId);
+    if (!aiPlayer) return;
+    const bestMove = chooseBestAiMove(aiId);
+    if (!bestMove) {
+      const newSkipped = { ...skippedPlayers, [aiId]: true };
+      setSkippedPlayers(newSkipped);
+      setTurnIndex(turnIndex + 1);
+      return;
+    }
+
+    const myColor = aiPlayer.getProfile().color.hexString;
+    const newBoard = { ...board };
+    bestMove.transformed.shape.forEach((o: any) => {
+      newBoard[`${bestMove.r + o.r}-${bestMove.c + o.c}`] = myColor;
+    });
+    const myUsed = usedPieces[aiId] || [];
+    const pieceKey = bestMove.pieceId.replace("p-", "");
+    const newUsed = { ...usedPieces, [aiId]: [...myUsed, pieceKey] };
+
+    setBoard(newBoard);
+    setUsedPieces(newUsed);
+    setTurnIndex(turnIndex + 1);
+  };
+
+  useEffect(() => {
+    if (!isAiTurn || !currentPlayer) return;
+    const aiId = currentPlayer.id;
+    const timeout = window.setTimeout(() => runAiTurn(aiId), 600);
+    return () => window.clearTimeout(timeout);
+  }, [isAiTurn, currentPlayer, board, usedPieces, skippedPlayers, gameMode]);
 
   const transformedData = useMemo(() => getTransformedDataFor(selectedPieceId, rotation, flipV, flipH), [selectedPieceId, rotation, flipV, flipH, gameMode]);
 
@@ -358,7 +587,7 @@ function App() {
 
   const handleRestart = () => {
     // 只有房主（第一个玩家）可以重新开始戏戏
-    if (!me || sortedPlayers[0]?.id !== me.id) return;
+    if (!me || humanPlayers[0]?.id !== me.id) return;
     
     const confirmed = window.confirm("确定要重新开始游戏吗？所有进度将被重置。");
     if (confirmed) {
@@ -398,7 +627,7 @@ function App() {
   const gameStatus = useMemo(() => {
     if (gameEnded) return { ended: true };
     
-    const allPlayersSkipped = sortedPlayers.every(p => skippedPlayers[p.id]);
+    const allPlayersSkipped = allPlayers.every(p => skippedPlayers[p.id]);
     
     if (allPlayersSkipped) {
       setGameEnded(true);
@@ -406,7 +635,7 @@ function App() {
     }
     
     return { ended: false };
-  }, [sortedPlayers, skippedPlayers, gameEnded]);
+  }, [allPlayers, skippedPlayers, gameEnded]);
 
   // 计算得分
   const scores = useMemo(() => {
@@ -416,7 +645,7 @@ function App() {
     const totalPieces = gameMode === "classic" ? 21 : 22;
     const piecesData = gameMode === "classic" ? CLASSIC_PIECES : REAL_PIECES;
     
-    sortedPlayers.forEach(p => {
+    allPlayers.forEach(p => {
       const usedCount = (usedPieces[p.id] || []).length;
       const remainingPieces = totalPieces - usedCount;
       let score = 0;
@@ -434,13 +663,13 @@ function App() {
     });
     
     return result;
-  }, [gameStatus.ended, sortedPlayers, usedPieces, gameMode]);
+  }, [gameStatus.ended, allPlayers, usedPieces, gameMode]);
 
-  const winner = useMemo((): typeof sortedPlayers[0][] => {
+  const winner = useMemo((): typeof allPlayers[0][] => {
     if (!gameStatus.ended) return [];
     let maxScore = -Infinity;
-    let winners: typeof sortedPlayers[0][] = [];
-    sortedPlayers.forEach(p => {
+    let winners: typeof allPlayers[0][] = [];
+    allPlayers.forEach(p => {
       const score = scores[p.id]?.score || 0;
       if (score > maxScore) {
         maxScore = score;
@@ -450,7 +679,7 @@ function App() {
       }
     });
     return winners;
-  }, [gameStatus.ended, scores, sortedPlayers]);
+  }, [gameStatus.ended, scores, allPlayers]);
 
   return (
     <div className="iphone-screen">
@@ -458,17 +687,20 @@ function App() {
         <ModeSelection onSelectMode={handleSelectMode} />
       ) : (
         <div className="iphone-container">
-          {me && sortedPlayers[0]?.id === me.id && (
+          {me && humanPlayers[0]?.id === me.id && (
             <button className="restart-btn-top" onClick={handleRestart}>🔄</button>
           )}
 
           <div className="header-section">
             <div className="avatar-row">
-              {sortedPlayers.map((p, i) => (
-                <div key={p.id} className={`avatar-item ${turnIndex % sortedPlayers.length === i && !gameEnded ? 'active' : ''}`}>
+              {allPlayers.map((p, i) => (
+                <div key={p.id} className={`avatar-item ${turnIndex % allPlayers.length === i && !gameEnded ? 'active' : ''}`}>
                   <div className="avatar-frame" style={{borderColor: p.getProfile().color.hexString}}>
                     <img src={p.getProfile().photo} alt="p" />
                   </div>
+                  {!gameEnded && skippedPlayers[p.id] && (
+                    <div className="surrender-flag">🏳️</div>
+                  )}
                   <span className="player-name">{p.getProfile().name.slice(0,5)}</span>
                   {gameEnded && scores[p.id] && (
                     <div className="score-display">
@@ -539,7 +771,7 @@ function App() {
           <div className="footer-scroll">
             <div className="scroll-indicator"></div>
             <p className="section-title">其他玩家剩余情况</p>
-            {sortedPlayers.filter(p => p.id !== me?.id).map(p => {
+            {allPlayers.filter(p => p.id !== me?.id).map(p => {
               const playerColor = p.getProfile().color.hexString;
               const usedIds = usedPieces[p.id] || [];
               const piecesData = gameMode === "classic" ? CLASSIC_PIECES : REAL_PIECES;
