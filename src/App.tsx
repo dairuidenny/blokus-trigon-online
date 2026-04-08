@@ -46,36 +46,25 @@ function App() {
   const players = usePlayersList();
   const humanPlayers = useMemo(() => [...players].sort((a, b) => a.id.localeCompare(b.id)), [players]);
   
-  // Fixed team colors for all players (both human and AI)
-  const TEAM_COLORS = ["#d64545", "#4b7bec", "#20bf6b", "#f39c12"];
-  
-  // Function to get consistent team color for any player based on their ID
-  const getTeamColor = (playerId: string) => {
-    let hash = 0;
-    for (let i = 0; i < playerId.length; i++) {
-      hash = ((hash << 5) - hash) + playerId.charCodeAt(i);
-      hash = hash & hash; // Convert to 32-bit integer
-    }
-    return TEAM_COLORS[Math.abs(hash) % TEAM_COLORS.length];
-  };
+  // PlayroomKit Lobby standard colors (Corrected Hex values)
+  const TEAM_COLORS = ["#59BF82", "#FFF27A", "#F14EEB", "#FF7F56", "#6BDCFF", "#3905F5", "#FF3666"];
   
   const aiPlayers = useMemo(() => {
     const needed = Math.max(0, 4 - humanPlayers.length);
+    
+    // Get colors already taken by human players (case-insensitive)
+    const takenColors = humanPlayers.map(p => p.getProfile().color?.hexString?.toUpperCase());
+    // Filter out taken colors from the standard pool
+    const availablePool = TEAM_COLORS.filter(c => !takenColors.includes(c.toUpperCase()));
+    
     return Array.from({ length: needed }, (_, idx) => {
       const aiId = `ai-${idx + 1}`;
-      const teamColor = getTeamColor(aiId);
+      // Assign a unique color from the remaining pool
+      const teamColor = availablePool[idx % availablePool.length] || "#888888";
       
-      // Generate random background color for AI avatar (different from team color)
-      const randomColor = `rgb(${Math.floor(Math.random() * 256)}, ${Math.floor(Math.random() * 256)}, ${Math.floor(Math.random() * 256)})`;
-      const rgbToHex = (rgb: string) => {
-        const match = rgb.match(/\d+/g);
-        if (!match) return "#808080";
-        const [r, g, b] = match.map(Number);
-        return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
-      };
-      const avatarBgColor = rgbToHex(randomColor);
+      const avatarBgColor = teamColor;
       
-      // Create SVG with random background and robot emoji
+      // Create SVG with background matching team color and robot emoji
       const svgStr = `<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40'><defs><linearGradient id='grad${idx}' x1='0%' y1='0%' x2='100%' y2='100%'><stop offset='0%' style='stop-color:${avatarBgColor};stop-opacity:1' /><stop offset='100%' style='stop-color:${avatarBgColor}cc;stop-opacity:1' /></linearGradient></defs><rect width='40' height='40' fill='url(#grad${idx})'/><text x='50%' y='50%' font-size='24' text-anchor='middle' dominant-baseline='central'>🤖</text></svg>`;
       const photoUrl = `data:image/svg+xml,${encodeURIComponent(svgStr)}`;
       
@@ -88,18 +77,11 @@ function App() {
         }),
       };
     });
-  }, [humanPlayers.length]);
+  }, [humanPlayers]);
   
   // Override human players' colors to use consistent team colors
   const allPlayers = useMemo(() => {
-    const playersWithColors = humanPlayers.map(p => ({
-      ...p,
-      getProfile: () => ({
-        ...p.getProfile(),
-        color: { hexString: getTeamColor(p.id) },
-      }),
-    }));
-    return [...playersWithColors, ...aiPlayers];
+    return [...humanPlayers, ...aiPlayers];
   }, [humanPlayers, aiPlayers]);
   const me = myPlayer();
 
@@ -701,7 +683,7 @@ function App() {
                   {!gameEnded && skippedPlayers[p.id] && (
                     <div className="surrender-flag">🏳️</div>
                   )}
-                  <span className="player-name">{p.getProfile().name.slice(0,5)}</span>
+                  <span className="player-name">{p.getProfile().name}</span>
                   {gameEnded && scores[p.id] && (
                     <div className="score-display">
                       <div>剩余: {scores[p.id].pieces}块</div>
@@ -781,40 +763,41 @@ function App() {
                   <div className="other-player-piece-grid">
                     {piecesData.map(piece => {
                       const isUsed = usedIds.includes(piece.id);
-                      if (isUsed) return <div key={piece.id} className="piece-card other-empty"></div>;
                       
                       return (
                         <div key={piece.id} className="piece-card other-piece">
-                          <svg width="50" height="50" viewBox="-40 -30 80 60" style={{ pointerEvents: 'none' }}>
-                            {piece.shape.map((offset, idx) => {
-                              if (gameMode === "classic") {
-                                // 正方形渲染逻辑（放大 2 倍）
-                                const scale = 2;
-                                const size = 8 * scale;
-                                return (
-                                  <rect
-                                    key={idx}
-                                    x={offset.c * size - size / 2}
-                                    y={offset.r * size - size / 2}
-                                    width={size}
-                                    height={size}
-                                    fill={playerColor}
-                                    fillOpacity={0.7}
-                                    stroke="#333"
-                                    strokeWidth="1"
-                                  />
-                                );
-                              } else {
-                                // 三角形渲染逻辑（放大 1.1 倍）
-                                const scale = 1.1;
-                                const ms = 20 * scale, mh = (ms * Math.sqrt(3)) / 2;
-                                const mx = offset.c * (ms / 2), my = offset.r * mh;
-                                const isUp = (piece as any).direction === 1 ? (offset.r + offset.c) % 2 === 0 : (offset.r + offset.c) % 2 !== 0;
-                                const pts = isUp ? `${mx},${my} ${mx-ms/2},${my+mh} ${mx+ms/2},${my+mh}` : `${mx},${my+mh} ${mx-ms/2},${my} ${mx+ms/2},${my}`;
-                                return <polygon key={idx} points={pts} fill={playerColor} fillOpacity={0.7} stroke="#333" strokeWidth="1" />;
-                              }
-                            })}
-                          </svg>
+                          {!isUsed && (
+                            <svg width="50" height="50" viewBox="-40 -30 80 60" style={{ pointerEvents: 'none' }}>
+                              {piece.shape.map((offset, idx) => {
+                                if (gameMode === "classic") {
+                                  // 正方形渲染逻辑（放大 2 倍）
+                                  const scale = 2;
+                                  const size = 8 * scale;
+                                  return (
+                                    <rect
+                                      key={idx}
+                                      x={offset.c * size - size / 2}
+                                      y={offset.r * size - size / 2}
+                                      width={size}
+                                      height={size}
+                                      fill={playerColor}
+                                      fillOpacity={0.7}
+                                      stroke="#333"
+                                      strokeWidth="1"
+                                    />
+                                  );
+                                } else {
+                                  // 三角形渲染逻辑（放大 1.1 倍）
+                                  const scale = 1.1;
+                                  const ms = 20 * scale, mh = (ms * Math.sqrt(3)) / 2;
+                                  const mx = offset.c * (ms / 2), my = offset.r * mh;
+                                  const isUp = (piece as any).direction === 1 ? (offset.r + offset.c) % 2 === 0 : (offset.r + offset.c) % 2 !== 0;
+                                  const pts = isUp ? `${mx},${my} ${mx-ms/2},${my+mh} ${mx+ms/2},${my+mh}` : `${mx},${my+mh} ${mx-ms/2},${my} ${mx+ms/2},${my}`;
+                                  return <polygon key={idx} points={pts} fill={playerColor} fillOpacity={0.7} stroke="#333" strokeWidth="1" />;
+                                }
+                              })}
+                            </svg>
+                          )}
                         </div>
                       );
                     })}
